@@ -1,0 +1,242 @@
+Metadata-Version: 2.4
+Name: slidescribe
+Version: 0.1.0
+Summary: Turn conference recordings into illustrated PDF transcripts.
+License: MIT
+Project-URL: Homepage, https://github.com/nishitghosh81/slidescribe
+Project-URL: Issues, https://github.com/nishitghosh81/slidescribe/issues
+Keywords: transcription,whisper,video,pdf,meetings,slides
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Topic :: Multimedia :: Video
+Classifier: Topic :: Text Processing
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: faster-whisper>=1.0.0
+Requires-Dist: opencv-python-headless>=4.8.0
+Requires-Dist: numpy>=1.24
+Requires-Dist: reportlab>=4.0.0
+Requires-Dist: tqdm>=4.65
+Provides-Extra: llm
+Requires-Dist: litellm>=1.40.0; extra == "llm"
+Provides-Extra: dev
+Requires-Dist: pytest>=7.4; extra == "dev"
+Requires-Dist: ruff>=0.4; extra == "dev"
+Provides-Extra: all
+Requires-Dist: litellm>=1.40.0; extra == "all"
+Dynamic: license-file
+
+# SlideScribe
+
+Turn a recorded conference call into an illustrated PDF transcript: every slide image
+sits directly above the words spoken while it was on screen.
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/nishitghosh81/slidescribe/blob/main/notebooks/SlideScribe_Colab.ipynb)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+
+**Input:** a screen-shared meeting recording.
+**Output:** a PDF where the deck and the discussion are back together.
+
+Recordings split the two things you need. The audio has the reasoning; the video has the
+diagram someone was pointing at. Scrubbing a 45-minute file to find the moment a chart
+appeared is the reason nobody rewatches meetings. SlideScribe puts them back in one
+readable document.
+
+---
+
+## Try it without installing anything
+
+Click the Colab badge above, then `Runtime` → `Run all`. Two cells: the first installs,
+the second takes your video and hands back a PDF. There is a built-in sample if you want
+to see the output before uploading anything of your own.
+
+## Install
+
+```bash
+pip install git+https://github.com/nishitghosh81/slidescribe.git
+```
+
+`ffmpeg` is not required — video and audio decoding are handled by OpenCV and
+faster-whisper's bundled decoder.
+
+## Use it
+
+```bash
+# Local only. No API key, no network calls.
+slidescribe meeting.mp4
+
+# With a model: smarter slide detection, slide titles, summary and action items.
+slidescribe meeting.mp4 --model gpt-4o --api-key sk-...
+
+# Webcam tile on the right? Analyse only the left three quarters of the frame.
+slidescribe meeting.mp4 --crop 0,0,0.75,1
+```
+
+From Python:
+
+```python
+from slidescribe import process_video, Config, LLMConfig
+
+result = process_video("meeting.mp4", "meeting.pdf")
+print(result)  # meeting.pdf — 14 slides, 402 segments, 187s
+
+# With a model
+config = Config(llm=LLMConfig(model="claude-sonnet-4-5", api_key="sk-ant-..."))
+process_video("meeting.mp4", config=config)
+```
+
+---
+
+## How it works
+
+```
+video ──┬── slide detection ── pHash + SSIM ──┬── [optional] vision model ──┐
+        │                                      │   arbitrates ambiguity     │
+        │                                                                   ├── PDF
+        └── transcription ──── faster-whisper ─── timestamped segments ─────┘
+```
+
+**Slide detection** samples one frame per second and compares each against the last using
+a perceptual hash (DCT-based) and structural similarity. When a frame differs enough, it
+is captured as a new slide.
+
+The interesting part is what *doesn't* count as a change. A cursor moving across a static
+slide, a webcam tile updating, or a bullet animating in are all pixel changes that are not
+slide changes. Two mechanisms handle this:
+
+- **SSIM must always agree.** Measured on real screen shares, a perceptual hash is
+  unstable on flat, high-contrast slides — a cursor crossing a static slide can produce
+  the same Hamming distance as a genuine slide change. SSIM separates the two cleanly
+  (noise stays above 0.98, real changes drop below 0.96), so pHash acts only as a
+  sensitivity boost and never fires alone. This single rule is the difference between 4
+  correct captures and 8 duplicates on a typical deck.
+- **A minimum gap** between captures, which absorbs animation churn.
+
+**Transcription** uses faster-whisper, a dedicated speech-to-text model. Segments come
+back with start and end times.
+
+**Assembly** joins the two by timestamp: each slide owns the transcript segments spoken
+between its appearance and the next slide's.
+
+## The LLM is optional, and that is the point
+
+The whole pipeline runs with no API key. Transcription, slide detection and PDF assembly
+are local, deterministic, and free. A model is not required for any of it.
+
+What a model adds, when you supply one:
+
+| Feature | Without a model | With a model |
+|---|---|---|
+| Transcription | faster-whisper | identical — an LLM adds nothing here |
+| Slide detection | pHash + SSIM | ambiguous cases arbitrated by vision |
+| Slide titles | numbered | titled from slide content |
+| Summary and action items | — | generated |
+| Transcript cleanup | raw ASR output | punctuated and paragraphed |
+
+The honest split: for a clean recording, local detection is genuinely competitive. Where a
+vision model earns its place is messy real-world footage — animated builds, embedded
+video, overlapping webcam tiles — and in the post-processing that has no non-LLM
+equivalent at all, like naming a slide or extracting action items.
+
+Only frames the CV stage flags as *borderline* are sent to the model, so cost scales with
+how ambiguous a recording is rather than how long it is. `max_vision_calls` caps it
+regardless.
+
+## Bring your own model
+
+SlideScribe never imports a provider SDK. Model calls go through
+[LiteLLM](https://github.com/BerriAI/litellm), so anything it routes to works:
+
+| Provider | `--model` |
+|---|---|
+| OpenAI | `gpt-4o` |
+| Anthropic | `claude-sonnet-4-5` |
+| Google | `gemini/gemini-2.0-flash` |
+| Groq | `groq/llama-3.3-70b-versatile` |
+| OpenRouter | `openrouter/anthropic/claude-sonnet-4-5` |
+| Ollama (local) | `ollama/llava` with `--api-base http://localhost:11434` |
+| vLLM / any OpenAI-compatible | your model name with `--api-base` |
+
+Vision-only features are skipped automatically if the model is text-only — SlideScribe
+probes for image support once at startup rather than failing twenty minutes into a run.
+A bad key or an unreachable endpoint degrades to no-LLM mode instead of crashing; you
+still get a PDF.
+
+Keys are read per-run from the flag or environment (`SLIDESCRIBE_MODEL`,
+`SLIDESCRIBE_API_KEY`, `SLIDESCRIBE_API_BASE`) and never written to disk.
+
+---
+
+## Tuning
+
+Defaults are calibrated for 720p/1080p screen shares. The two knobs worth touching:
+
+| Symptom | Fix |
+|---|---|
+| Duplicate near-identical slides | Raise `--hash-threshold` to 8–10, lower `--ssim-threshold` to 0.92, or raise `--min-slide-seconds` |
+| Slides missed | Lower `--hash-threshold` to 4, raise `--ssim-threshold` to 0.97 |
+| Webcam tile triggering captures | `--crop 0,0,0.75,1` to analyse only the shared region |
+| Poor transcript | `--whisper-model medium` or `large-v3` (GPU recommended), set `--language` |
+| Slow on CPU | `--whisper-model base` or `tiny` |
+
+Full option list: `slidescribe --help`.
+
+### Choosing a Whisper model
+
+| Model | Rough speed on a T4 | Use when |
+|---|---|---|
+| `tiny` / `base` | very fast | CPU-only, or you want a quick draft |
+| `small` (default) | fast | the sensible default |
+| `medium` / `large-v3` | slow | accented speech, technical vocabulary, GPU available |
+
+## Requirements
+
+Python 3.9+. Core dependencies: `faster-whisper`, `opencv-python-headless`, `numpy`,
+`reportlab`, `tqdm`. Add `litellm` for the optional model layer.
+
+A GPU is not required but changes transcription from tens of minutes to a few.
+
+## Development
+
+```bash
+git clone https://github.com/nishitghosh81/slidescribe.git
+cd slidescribe
+pip install -e ".[dev,llm]"
+pytest -q
+```
+
+The test suite builds synthetic screen recordings containing a moving cursor and a noisy
+webcam tile, then asserts that detection finds every real slide change and none of the
+fake ones. Both adversarial cases are regression-guarded.
+
+## Limitations
+
+- Tuned for **screen-shared slide decks**. Continuous scrolling, live coding, or
+  whiteboarding will over-trigger; raise `--min-slide-seconds` and expect to tune.
+- **No speaker labels.** Diarization is a separate model
+  ([pyannote.audio](https://github.com/pyannote/pyannote-audio)) and is not wired in yet.
+- Long recordings are processed in memory; a multi-hour file on a small machine may need
+  a lower `--sample-fps`.
+- Slide *images* are captured, not the underlying deck — text in them is not searchable
+  unless you enable captioning.
+
+## Roadmap
+
+- Speaker diarization
+- HTML and Markdown output alongside PDF
+- Embedding-based detection (CLIP/DINOv2) as a middle tier between pHash and a vision model
+- Batch mode for multiple recordings
+
+## Contributing
+
+Issues and pull requests welcome. If you hit a recording that detects badly, an issue with
+the failure mode (missed slides, duplicates, what the source looked like) is genuinely
+useful — detection tuning improves from real examples.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

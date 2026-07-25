@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "slidescribe"
+version = "0.1.0"
+description = "Turn conference recordings into illustrated PDF transcripts."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["transcription", "whisper", "video", "pdf", "meetings", "slides"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Multimedia :: Video",
+  "Topic :: Text Processing",
+]
+dependencies = [
+  "faster-whisper>=1.0.0",
+  "opencv-python-headless>=4.8.0",
+  "numpy>=1.24",
+  "reportlab>=4.0.0",
+  "tqdm>=4.65",
+]
+
+[project.optional-dependencies]
+llm = ["litellm>=1.40.0"]
+dev = ["pytest>=7.4", "ruff>=0.4"]
+all = ["litellm>=1.40.0"]
+
+[project.scripts]
+slidescribe = "slidescribe.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/nishitghosh81/slidescribe"
+Issues = "https://github.com/nishitghosh81/slidescribe/issues"
+
+[tool.setuptools.packages.find]
+include = ["slidescribe*"]
+
+[tool.ruff]
+line-length = 100

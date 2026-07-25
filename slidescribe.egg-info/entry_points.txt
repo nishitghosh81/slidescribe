@@ -1,0 +1,2 @@
+[console_scripts]
+slidescribe = slidescribe.cli:main

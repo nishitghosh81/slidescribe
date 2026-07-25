@@ -1,0 +1,15 @@
+faster-whisper>=1.0.0
+opencv-python-headless>=4.8.0
+numpy>=1.24
+reportlab>=4.0.0
+tqdm>=4.65
+
+[all]
+litellm>=1.40.0
+
+[dev]
+pytest>=7.4
+ruff>=0.4
+
+[llm]
+litellm>=1.40.0
